@@ -1,8 +1,8 @@
 """Risk prediction used by the backend.
 
-Tries the trained Random Forest models in ml/ (trained on SYNTHETIC data).
-If they are missing, falls back to fixed threshold rules and says so in MODEL_KIND.
-The thresholds below are the same ones used to generate the synthetic training
+Uses the trained Random Forest models in ml/ (trained on SYNTHETIC data) when they are
+available, otherwise fixed threshold rules. current_kind() says which one is answering.
+The thresholds in _rules_predict are the same ones used to generate the synthetic training
 data (ml/generate_data.py). They are a project SUGGESTION, not from the Word document.
 """
 import sys
@@ -16,21 +16,48 @@ if str(PROJECT_ROOT) not in sys.path:
 RULES_KIND = "PLACEHOLDER_RULES"
 ML_KIND = "RANDOM_FOREST_SYNTHETIC"
 
+_ml_predict = None
+_warned = False
 
-def _load_ml():
-    """Return ml.predict.predict_risk if both trained models work, else None."""
+
+def _get_ml():
+    """Return ml.predict.predict_risk if both trained models load, else None (use fixed rules).
+
+    Checked again on every call while the models are missing, so training them (or calling
+    POST /api/models/retrain) switches the backend over without a restart.
+    """
+    global _ml_predict, _warned
+    if _ml_predict is not None:
+        return _ml_predict
     try:
         from ml.predict import predict_risk as ml_predict
         ml_predict({"max_temp_c": 30.0}, "THERMAL")
         ml_predict({"capacity_pct": 95.0}, "HEALTH")
-        return ml_predict
     except Exception as exc:
-        print("[predictor] ML models not available, using fixed rules:", repr(exc))
+        if not _warned:
+            print("[predictor] ML models not available, using fixed rules:", repr(exc))
+            _warned = True
         return None
+    _ml_predict = ml_predict
+    return _ml_predict
 
 
-_ml_predict = _load_ml()
-MODEL_KIND = ML_KIND if _ml_predict is not None else RULES_KIND
+def reset_ml():
+    """Forget the loaded models (called after retraining) so the new files are used."""
+    global _ml_predict, _warned
+    _ml_predict = None
+    _warned = False
+    module = sys.modules.get("ml.predict")
+    cache = getattr(module, "_cache", None)
+    if isinstance(cache, dict):
+        cache.clear()
+
+
+def current_kind() -> str:
+    return ML_KIND if _get_ml() is not None else RULES_KIND
+
+
+MODEL_KIND = current_kind()  # value at startup; kept so older imports keep working
 
 
 def _rules_predict(features: dict, risk_type: str) -> dict:
@@ -67,6 +94,7 @@ def _rules_predict(features: dict, risk_type: str) -> dict:
 
 def predict_risk(features: dict, risk_type: str) -> dict:
     risk_type = str(risk_type).upper()
-    if _ml_predict is not None:
-        return _ml_predict(features, risk_type)
+    ml_predict = _get_ml()
+    if ml_predict is not None:
+        return ml_predict(features, risk_type)
     return _rules_predict(features, risk_type)
