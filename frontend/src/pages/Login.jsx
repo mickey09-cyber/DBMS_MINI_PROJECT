@@ -9,21 +9,21 @@ export default function Login() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function handleSubmit(e) {
-    e.preventDefault();
+  async function handleSubmit(event) {
+    event.preventDefault();
 
     setError("");
     setLoading(true);
 
     try {
-      const response = await fetch("http://localhost:8000/api/auth/login", {
+      const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          username,
-          password,
+          username: username,
+          password: password,
         }),
       });
 
@@ -31,17 +31,20 @@ export default function Login() {
 
       if (!response.ok) {
         throw new Error(
-          data?.error?.message ||
-          data?.detail ||
-          "Login failed"
+          data.detail || data.message || "Invalid username or password"
         );
+      }
+
+      if (!data.access_token) {
+        throw new Error("Login succeeded but no access token was returned.");
       }
 
       localStorage.setItem("access_token", data.access_token);
 
       navigate("/");
     } catch (err) {
-      setError(err.message);
+      console.error("Login error:", err);
+      setError(err.message || "Login failed");
     } finally {
       setLoading(false);
     }
@@ -50,44 +53,56 @@ export default function Login() {
   return (
     <div className="login-page">
       <div className="login-card">
-        <div className="login-icon">⚡</div>
-
         <h1>Battery Thermal Monitor</h1>
-        <p className="login-subtitle">
-          Sign in to monitor battery health and thermal risk.
+
+        <p className="muted">
+          Sign in to access the monitoring dashboard.
         </p>
 
         <form onSubmit={handleSubmit}>
-          <label htmlFor="username">Username</label>
+          <div className="field">
+            <label htmlFor="username">
+              Username
+            </label>
 
-          <input
-            id="username"
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="Enter username"
-            required
-          />
+            <input
+              id="username"
+              type="text"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              placeholder="Enter username"
+              required
+              autoComplete="username"
+            />
+          </div>
 
-          <label htmlFor="password">Password</label>
+          <div className="field">
+            <label htmlFor="password">
+              Password
+            </label>
 
-          <input
-            id="password"
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Enter password"
-            required
-          />
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="Enter password"
+              required
+              autoComplete="current-password"
+            />
+          </div>
 
           {error && (
-            <div className="login-error">
+            <div className="error">
               {error}
             </div>
           )}
 
-          <button type="submit" disabled={loading}>
-            {loading ? "Signing in..." : "Sign in"}
+          <button
+            type="submit"
+            disabled={loading}
+          >
+            {loading ? "Signing in..." : "Login"}
           </button>
         </form>
       </div>

@@ -6,6 +6,7 @@ import {
   Link,
 } from "react-router-dom";
 
+import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import BatteryDetail from "./pages/BatteryDetail";
 import Alerts from "./pages/Alerts";
@@ -37,12 +38,14 @@ function Logo() {
         stroke="currentColor"
         strokeWidth="1.8"
       />
+
       <path
         d="M22 11v3"
         stroke="currentColor"
         strokeWidth="2"
         strokeLinecap="round"
       />
+
       <path
         d="M11.5 9.5 9 13h3l-1 3 3.5-4h-3l1-2.5z"
         fill="currentColor"
@@ -111,64 +114,92 @@ export default function App() {
 
       <main id="main" className="wrap">
         <Routes>
-          <Route path="/" element={<Dashboard />} />
 
+          {/* Login */}
+          <Route
+            path="/login"
+            element={<Login />}
+          />
+
+          {/* Dashboard */}
+          <Route
+            path="/"
+            element={<Dashboard />}
+          />
+
+          {/* Battery Details */}
           <Route
             path="/battery/:id"
             element={<BatteryDetail />}
           />
 
-          <Route path="/alerts" element={<Alerts />} />
+          {/* Alerts */}
+          <Route
+            path="/alerts"
+            element={<Alerts />}
+          />
 
+          {/* Predictions */}
           <Route
             path="/predictions"
             element={<Predictions />}
           />
 
+          {/* Anomalies */}
           <Route
             path="/anomalies"
             element={<Anomalies />}
           />
 
+          {/* Recommendations */}
           <Route
             path="/recommendations"
             element={<Recommendations />}
           />
 
+          {/* Data Entry */}
           <Route
             path="/data-entry"
             element={<DataEntry />}
           />
 
+          {/* Feedback */}
           <Route
             path="/feedback"
             element={<Feedback />}
           />
 
+          {/* Model Performance */}
           <Route
             path="/model-performance"
             element={<ModelPerformance />}
           />
 
+          {/* Analytics */}
           <Route
             path="/analytics"
             element={<Analytics />}
           />
 
+          {/* Admin */}
           <Route
             path="/admin"
             element={<Admin />}
           />
 
+          {/* 404 */}
           <Route
             path="*"
             element={
               <div className="state">
                 <h2>Page not found</h2>
-                <Link to="/">Back to fleet</Link>
+                <Link to="/">
+                  Back to fleet
+                </Link>
               </div>
             }
           />
+
         </Routes>
       </main>
     </HashRouter>

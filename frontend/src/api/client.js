@@ -11,8 +11,7 @@ import {
 // Set VITE_USE_MOCK=false in .env to use the FastAPI backend.
 const USE_MOCK = import.meta.env.VITE_USE_MOCK !== "false";
 
-const BASE =
-  import.meta.env.VITE_API_URL || "http://localhost:8000";
+const BASE = import.meta.env.VITE_API_URL || '/api';
 
 // ============================================================
 // HELPERS
