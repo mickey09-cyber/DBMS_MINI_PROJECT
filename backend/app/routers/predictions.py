@@ -7,7 +7,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.predictor import MODEL_KIND, predict_risk
+from app.predictor import current_kind, predict_risk
 from app.schemas_predictions import (
     PredictionCreated,
     PredictionOut,
@@ -204,7 +204,7 @@ def create_risk_prediction(body: PredictionRequest, db: Session = Depends(get_db
         "serial_number": battery["serial_number"],
         "risk_type": body.risk_type,
         "model_name": model["model_name"],
-        "model_kind": MODEL_KIND,
+        "model_kind": current_kind(),
         "predicted_label": predicted,
         "confidence": result.get("confidence"),
         "final_risk_level": final,

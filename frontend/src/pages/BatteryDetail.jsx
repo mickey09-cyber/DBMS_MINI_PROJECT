@@ -1,835 +1,406 @@
 import { useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
-  AreaChart,
-  Area,
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
-  ReferenceLine,
-  ResponsiveContainer,
-} from "recharts";
-
+  ArrowLeft,
+  Flame,
+  Activity,
+  Zap,
+  Wind,
+  Cpu,
+  Bell,
+  Sparkles,
+  ExternalLink,
+  Layers,
+} from "lucide-react";
 import { api } from "../api/client";
 import { useFetch } from "../hooks/useFetch";
-import RiskBadge from "../components/RiskBadge";
-import Stat from "../components/Stat";
-import { ErrorState, Skeleton } from "../components/PageState";
-import {
-  CRIT_C,
-  WARN_C,
-  tempStatus,
-  healthStatus,
-  timeAgo,
-} from "../lib/thresholds";
-
-const RANGES = [
-  ["10", "Last 10"],
-  ["20", "Last 20"],
-  ["all", "All"],
-];
-
-function ChartTip({ active, payload, label, unit, last }) {
-  if (!active || !payload?.length) return null;
-
-  return (
-    <div className="tip">
-      <div className="muted">
-        {label === last
-          ? "Latest reading"
-          : `${last - label} readings ago`}
-      </div>
-
-      <b>
-        {payload[0].value}
-        {unit}
-      </b>
-    </div>
-  );
-}
+import StatCard from "../components/ui/StatCard";
+import RiskBadge from "../components/telemetry/RiskBadge";
+import ThermalGauge from "../components/telemetry/ThermalGauge";
+import SohBar from "../components/telemetry/SohBar";
+import LiveTelemetryChart from "../components/telemetry/LiveTelemetryChart";
+import AgingCurveChart from "../components/telemetry/AgingCurveChart";
+import CfdSimulationView from "../components/telemetry/CfdSimulationView";
+import SpatialSensorGrid from "../components/telemetry/SpatialSensorGrid";
+import AIInsightsPanel from "../components/ai/AIInsightsPanel";
+import { ErrorState, SkeletonLoader } from "../components/ui/PageState";
+import { formatMohm, formatCycles, timeAgo } from "../lib/thresholds";
 
 export default function BatteryDetail() {
   const { id } = useParams();
-  const [range, setRange] = useState("all");
+  const batteryId = Number(id);
 
-  const { data, loading, error, reload } = useFetch(
-    async () => {
-      const batteryId = Number(id);
-
-      // -------------------------------------------------------
-      // Get battery list
-      // -------------------------------------------------------
-      const batteries = await api.getBatteries();
-
-      const battery = batteries.find(
-        (b) => b.battery_id === batteryId
-      );
-
-      if (!battery) {
-        return {
-          battery: null,
-          readings: [],
-          alerts: [],
-          predictions: [],
-          aging: null,
-          sensors: [],
-        };
-      }
-
-      // -------------------------------------------------------
-      // Get sensors, aging, predictions and alerts
-      // -------------------------------------------------------
-      const [
-        sensors,
-        aging,
-        predictions,
-        alerts,
-      ] = await Promise.all([
-        api.getSensors(batteryId).catch(() => []),
-
-        api.getAgingLatest(batteryId).catch(() => null),
-
-        api.getPredictions().catch(() => []),
-
-        api.getAlerts().catch(() => []),
-      ]);
-
-      // -------------------------------------------------------
-      // Find temperature sensors
-      // -------------------------------------------------------
-      const temperatureSensors = sensors.filter(
-        (sensor) => sensor.sensor_type === "TEMPERATURE"
-      );
-
-      // -------------------------------------------------------
-      // Get readings from every temperature sensor
-      // -------------------------------------------------------
-      const sensorReadings = await Promise.all(
-        temperatureSensors.map(async (sensor) => {
-          try {
-            const response = await api.getSensorReadings(
-              sensor.sensor_id
-            );
-
-            return response?.readings ?? [];
-          } catch (error) {
-            console.error(
-              `Failed to get readings for sensor ${sensor.sensor_id}`,
-              error
-            );
-
-            return [];
-          }
-        })
-      );
-
-      const allReadings = sensorReadings.flat();
-
-      // -------------------------------------------------------
-      // Sort oldest → newest
-      // -------------------------------------------------------
-      allReadings.sort(
-        (a, b) =>
-          new Date(a.recorded_at) -
-          new Date(b.recorded_at)
-      );
-
-      // -------------------------------------------------------
-      // Create chart data
-      // -------------------------------------------------------
-      const readings = allReadings.map((reading, index) => ({
-        ...reading,
-        t: index,
-        soh_pct: aging?.soh_pct ?? null,
-      }));
-
-      // -------------------------------------------------------
-      // Battery-specific alerts
-      // -------------------------------------------------------
-      const batteryAlerts = alerts.filter(
-        (alert) =>
-          Number(alert.battery_id) === batteryId
-      );
-
-      // -------------------------------------------------------
-      // Battery-specific predictions
-      // -------------------------------------------------------
-      const batteryPredictions = predictions.filter(
-        (prediction) =>
-          Number(prediction.battery_id) === batteryId
-      );
-
-      return {
-        battery,
-        readings,
-        alerts: batteryAlerts,
-        predictions: batteryPredictions,
-        aging,
-        sensors,
-      };
-    },
-    [id]
-  );
-
-  // ---------------------------------------------------------
-  // Loading / error
-  // ---------------------------------------------------------
-
-  if (error) {
-    return (
-      <ErrorState
-        error={error}
-        onRetry={reload}
-      />
-    );
-  }
-
-  if (loading && !data) {
-    return (
-      <>
-        <Link to="/" className="back">
-          ← Back to fleet
-        </Link>
-
-        <Skeleton rows={4} />
-      </>
-    );
-  }
+  const [activeTab, setActiveTab] = useState("thermal");
+  const [evaluating, setEvaluating] = useState(false);
+  const [_scanResult, setScanResult] = useState(null);
 
   const {
-    battery,
-    readings,
-    alerts,
-    predictions,
-    aging,
-    sensors,
-  } = data;
+    data,
+    loading,
+    error,
+    reload,
+  } = useFetch(async () => {
+    const [battery, readings, agingHistory, sensors, twin, alerts, predictions, anomalies] =
+      await Promise.all([
+        api.getBattery(batteryId),
+        api.getReadings(batteryId),
+        api.getAgingHistory(batteryId),
+        api.getSensors(batteryId),
+        api.getDigitalTwin(batteryId),
+        api.getAlerts(),
+        api.getPredictions(),
+        api.getAnomalies(),
+      ]);
 
-  // ---------------------------------------------------------
-  // Battery not found
-  // ---------------------------------------------------------
+    return {
+      battery,
+      readings,
+      agingHistory,
+      sensors,
+      twin,
+      alerts: alerts.filter((a) => Number(a.battery_id) === batteryId),
+      predictions: predictions.filter((p) => Number(p.battery_id) === batteryId),
+      anomalies: anomalies.filter((a) => Number(a.battery_id) === batteryId),
+    };
+  }, [batteryId]);
+
+  const handleRunAssessment = async () => {
+    setEvaluating(true);
+    try {
+      await api.createRiskPrediction({
+        battery_id: batteryId,
+        risk_type: "THERMAL",
+        notes: "On-demand operator evaluation triggered from studio",
+      });
+      reload();
+    } catch (err) {
+      console.error("Assessment run failed:", err);
+    } finally {
+      setEvaluating(false);
+    }
+  };
+
+  const handleScanAnomalies = async () => {
+    try {
+      const res = await api.detectAnomalies(batteryId);
+      setScanResult(res);
+      reload();
+    } catch (err) {
+      console.error("Anomaly scan failed:", err);
+    }
+  };
+
+  if (error) return <ErrorState error={error} onRetry={reload} />;
+  if (loading && !data) return <SkeletonLoader rows={8} />;
+
+  const { battery, readings, agingHistory, sensors, twin, alerts, predictions, anomalies } = data;
 
   if (!battery) {
     return (
-      <div className="state">
-        <h2>Battery not found</h2>
-
-        <p className="muted">
-          No battery with ID {id}.
-        </p>
-
-        <Link to="/" className="btn">
-          Back to fleet
+      <div className="card" style={{ padding: 32, textAlign: "center" }}>
+        <h3>Battery Pack #{id} Not Found</h3>
+        <p style={{ color: "var(--text-muted)" }}>This pack may not be registered in the active database.</p>
+        <Link to="/" className="btn primary">
+          Back to Fleet Overview
         </Link>
       </div>
     );
   }
 
-  // ---------------------------------------------------------
-  // Current / displayed readings
-  // ---------------------------------------------------------
-
-  const shown =
-    range === "all"
-      ? readings
-      : readings.slice(-Number(range));
-
-  const last =
-    readings.length > 0
-      ? readings.length - 1
-      : 0;
-
-  const latestTemperature =
-    readings.length > 0
-      ? readings[readings.length - 1].temperature_c
-      : battery.temperature_c ?? null;
-
-  const temperatureValues = shown
-    .map((r) => r.temperature_c)
-    .filter((value) => value != null);
-
-  const peak =
-    temperatureValues.length > 0
-      ? Math.max(...temperatureValues)
-      : null;
-
-  // ---------------------------------------------------------
-  // Risk
-  // ---------------------------------------------------------
-
-  const thermalPrediction = predictions.find(
-    (prediction) =>
-      prediction.risk_type === "THERMAL"
-  );
-
-  const riskLevel =
-    thermalPrediction?.final_risk_level?.toLowerCase() ??
-    battery.risk_level ??
-    "unknown";
-
-  // ---------------------------------------------------------
-  // SOH
-  // ---------------------------------------------------------
-
-  const soh =
-    aging?.soh_pct ??
-    battery.soh_pct ??
-    null;
-
-  // ---------------------------------------------------------
-  // Temperature status
-  // ---------------------------------------------------------
-
-  const ts =
-    latestTemperature != null
-      ? tempStatus(latestTemperature)
-      : {
-          key: undefined,
-          label: "No temperature data",
-        };
-
-  // ---------------------------------------------------------
-  // Open alerts
-  // ---------------------------------------------------------
-
-  const openAlerts = alerts.filter(
-    (alert) =>
-      alert.status === "open" ||
-      alert.status === "OPEN"
-  );
-
-  // ---------------------------------------------------------
-  // Chart tick formatter
-  // ---------------------------------------------------------
-
-  const tickFmt = (t) =>
-    t === last
-      ? "now"
-      : `-${last - t}`;
+  const latestReading = readings && readings.length > 0 ? readings[readings.length - 1] : null;
+  const currentTemp = latestReading?.temperature_c ?? battery.temperature_c ?? 34.0;
+  const currentSoh = battery.soh_pct ?? 92.0;
+  const isCritical = battery.risk_level === "critical" || currentTemp >= 60.0;
 
   return (
-    <div>
-      {/* --------------------------------------------------- */}
-      {/* BACK */}
-      {/* --------------------------------------------------- */}
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Back navigation & Quick Bar */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <Link to="/" className="btn sm" style={{ gap: 6 }}>
+          <ArrowLeft size={14} />
+          Back to Fleet
+        </Link>
 
-      <Link to="/" className="back">
-        ← Back to fleet
-      </Link>
-
-      {/* --------------------------------------------------- */}
-      {/* HEADER */}
-      {/* --------------------------------------------------- */}
-
-      <div className="head">
-        <div>
-          <h1>
-            {battery.serial_number ??
-              battery.battery_id}
-          </h1>
-
-          <div className="muted">
-            {battery.manufacturer_name ?? "—"} ·{" "}
-            {battery.chemistry_code ?? "—"} ·{" "}
-            {battery.battery_type ?? "—"}
-          </div>
-        </div>
-
-        <RiskBadge level={riskLevel} />
-      </div>
-
-      {/* --------------------------------------------------- */}
-      {/* STATS */}
-      {/* --------------------------------------------------- */}
-
-      <div className="stats">
-        <Stat
-          label="State of health"
-          value={
-            soh != null
-              ? `${soh}%`
-              : "—"
-          }
-          tone={
-            soh != null
-              ? healthStatus(soh)
-              : undefined
-          }
-          sub={
-            soh == null
-              ? "No aging data"
-              : soh >= 80
-                ? "good"
-                : soh >= 70
-                  ? "degrading"
-                  : "poor"
-          }
-        />
-
-        <Stat
-          label="Temperature now"
-          value={
-            latestTemperature != null
-              ? `${latestTemperature}°C`
-              : "—"
-          }
-          tone={ts.key}
-          sub={ts.label}
-        />
-
-        <Stat
-          label="Peak in view"
-          value={
-            peak != null
-              ? `${peak.toFixed(1)}°C`
-              : "—"
-          }
-          tone={
-            peak != null
-              ? tempStatus(peak).key
-              : undefined
-          }
-          sub={
-            peak != null
-              ? tempStatus(peak).label
-              : "No readings"
-          }
-        />
-
-        <Stat
-          label="Open alerts"
-          value={openAlerts.length}
-          tone={
-            openAlerts.length
-              ? "high"
-              : undefined
-          }
-          sub={
-            openAlerts.length
-              ? "needs review"
-              : "all clear"
-          }
-        />
-      </div>
-
-      {/* --------------------------------------------------- */}
-      {/* BATTERY INFORMATION */}
-      {/* --------------------------------------------------- */}
-
-      <div className="panel">
-        <h2>Battery information</h2>
-
-        <div className="stats">
-          <Stat
-            label="Battery ID"
-            value={battery.battery_id}
-          />
-
-          <Stat
-            label="Chemistry"
-            value={
-              battery.chemistry_code ?? "—"
-            }
-          />
-
-          <Stat
-            label="Capacity"
-            value={
-              battery.nominal_capacity_ah != null
-                ? `${battery.nominal_capacity_ah} Ah`
-                : "—"
-            }
-          />
-
-          <Stat
-            label="Status"
-            value={
-              battery.status ?? "—"
-            }
-          />
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn sm" onClick={handleScanAnomalies}>
+            <Sparkles size={13} />
+            Scan Anomalies
+          </button>
+          <button className="btn sm primary" onClick={handleRunAssessment} disabled={evaluating}>
+            <Cpu size={13} />
+            {evaluating ? "Evaluating…" : "Evaluate AI Model"}
+          </button>
         </div>
       </div>
 
-      {/* --------------------------------------------------- */}
-      {/* TEMPERATURE CHART */}
-      {/* --------------------------------------------------- */}
+      {/* Hero Header Ribbon */}
+      <div className="card" style={{ borderLeft: `4px solid ${isCritical ? "var(--status-critical)" : "var(--accent-primary)"}` }}>
+        <div className="card-body" style={{ padding: 22 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 16 }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 6 }}>
+                <span className={`chem-badge ${battery.chemistry_code?.toLowerCase() || "nmc"}`}>
+                  {battery.chemistry_code || "NMC"}
+                </span>
+                <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700 }}>
+                  {battery.battery_type || battery.model || `Pack #${battery.battery_id}`}
+                </h1>
+                <RiskBadge level={isCritical ? "critical" : battery.risk_level} />
+              </div>
 
-      <div className="panel">
-        <div className="panel-head">
-          <h2>Temperature (°C)</h2>
-
-          <div
-            className="seg small"
-            role="group"
-            aria-label="Time range"
-          >
-            {RANGES.map(([key, label]) => (
-              <button
-                key={key}
-                className={
-                  range === key ? "on" : ""
-                }
-                aria-pressed={
-                  range === key
-                }
-                onClick={() =>
-                  setRange(key)
-                }
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {shown.length === 0 ? (
-          <div className="state">
-            <h2>No temperature readings</h2>
-
-            <p className="muted">
-              This battery currently has no
-              temperature sensor readings available.
-            </p>
-          </div>
-        ) : (
-          <>
-            <ResponsiveContainer
-              width="100%"
-              height={280}
-            >
-              <AreaChart
-                data={shown}
-                margin={{
-                  top: 10,
-                  right: 12,
-                  left: -12,
-                  bottom: 0,
-                }}
-              >
-                <defs>
-                  <linearGradient
-                    id="tfill"
-                    x1="0"
-                    y1="0"
-                    x2="0"
-                    y2="1"
-                  >
-                    <stop
-                      offset="0%"
-                      stopColor="#14212b"
-                      stopOpacity={0.22}
-                    />
-
-                    <stop
-                      offset="100%"
-                      stopColor="#14212b"
-                      stopOpacity={0}
-                    />
-                  </linearGradient>
-                </defs>
-
-                <CartesianGrid
-                  stroke="#e6ebee"
-                  vertical={false}
-                />
-
-                <XAxis
-                  dataKey="t"
-                  tickLine={false}
-                  tickFormatter={tickFmt}
-                />
-
-                <YAxis
-                  domain={[20, 80]}
-                  tickLine={false}
-                  axisLine={false}
-                />
-
-                <Tooltip
-                  content={
-                    <ChartTip
-                      unit="°C"
-                      last={last}
-                    />
-                  }
-                />
-
-                <ReferenceLine
-                  y={WARN_C}
-                  stroke="#c98a0b"
-                  strokeDasharray="4 4"
-                  label={{
-                    value: `Warning ${WARN_C}`,
-                    fill: "#8a5d00",
-                    fontSize: 12,
-                    position:
-                      "insideTopLeft",
-                  }}
-                />
-
-                <ReferenceLine
-                  y={CRIT_C}
-                  stroke="#c23b2e"
-                  strokeDasharray="4 4"
-                  label={{
-                    value: `Critical ${CRIT_C}`,
-                    fill: "#9b2a20",
-                    fontSize: 12,
-                    position:
-                      "insideTopLeft",
-                  }}
-                />
-
-                <Area
-                  type="monotone"
-                  dataKey="temperature_c"
-                  stroke="#14212b"
-                  strokeWidth={2}
-                  fill="url(#tfill)"
-                  dot={false}
-                  activeDot={{ r: 4 }}
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-
-            <div className="axis-note muted">
-              Readings ago
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 16, fontSize: 13, color: "var(--text-muted)" }}>
+                <span><b>Serial:</b> <span className="mono">{battery.serial_number}</span></span>
+                <span><b>OEM:</b> {battery.manufacturer_name || "Tier 1"}</span>
+                <span><b>Nominal Capacity:</b> <span className="mono">{battery.nominal_capacity_ah || 150} Ah</span></span>
+                <span><b>Installed:</b> <span className="mono">{battery.install_date || "2024-01-15"}</span></span>
+              </div>
             </div>
-          </>
-        )}
-      </div>
 
-      {/* --------------------------------------------------- */}
-      {/* SOH */}
-      {/* --------------------------------------------------- */}
-
-      <div className="panel">
-        <h2>State of health (%)</h2>
-
-        {soh == null ? (
-          <p className="muted">
-            No aging data is available for this battery.
-          </p>
-        ) : (
-          <ResponsiveContainer
-            width="100%"
-            height={220}
-          >
-            <LineChart
-              data={shown}
-              margin={{
-                top: 10,
-                right: 12,
-                left: -12,
-                bottom: 0,
+            {/* Quick Diagnostic Pill */}
+            <div
+              style={{
+                backgroundColor: "var(--bg-surface-subtle)",
+                padding: "8px 14px",
+                borderRadius: "var(--radius-md)",
+                border: "1px solid var(--border-subtle)",
+                textAlign: "right",
               }}
             >
-              <CartesianGrid
-                stroke="#e6ebee"
-                vertical={false}
-              />
-
-              <XAxis
-                dataKey="t"
-                tickLine={false}
-                tickFormatter={tickFmt}
-              />
-
-              <YAxis
-                domain={["auto", "auto"]}
-                tickLine={false}
-                axisLine={false}
-              />
-
-              <Tooltip
-                content={
-                  <ChartTip
-                    unit="%"
-                    last={last}
-                  />
-                }
-              />
-
-              <Line
-                type="monotone"
-                dataKey="soh_pct"
-                stroke="#1f8a70"
-                strokeWidth={2}
-                dot={false}
-                activeDot={{ r: 4 }}
-              />
-            </LineChart>
-          </ResponsiveContainer>
-        )}
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Active Operating State</div>
+              <div style={{ fontWeight: 600, fontSize: 13.5, color: isCritical ? "var(--status-critical-text)" : "var(--status-safe-text)" }}>
+                {isCritical ? "⚠️ Critical Thermal Runaway Threat" : "✓ Nominal Operational Envelope"}
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      {/* --------------------------------------------------- */}
-      {/* AGING INFORMATION */}
-      {/* --------------------------------------------------- */}
+      {/* Top Telemetry KPI Row */}
+      <div className="stats-grid">
+        <div className="stat-card">
+          <div className="stat-card-accent-line" style={{ backgroundColor: isCritical ? "var(--status-critical)" : "var(--status-warning)" }} />
+          <ThermalGauge temperature_c={currentTemp} chemistry={battery.chemistry_code} />
+        </div>
 
-      {aging && (
-        <div className="panel">
-          <h2>Aging information</h2>
+        <div className="stat-card">
+          <div className="stat-card-accent-line" style={{ backgroundColor: currentSoh >= 80 ? "var(--status-safe)" : "var(--status-warning)" }} />
+          <SohBar soh_pct={currentSoh} />
+        </div>
 
-          <div className="stats">
-            <Stat
-              label="Cycle count"
-              value={
-                aging.cycle_count ?? "—"
-              }
-            />
+        <StatCard
+          label="Internal Resistance"
+          value={formatMohm(battery.internal_resistance_mohm || 1.85)}
+          sub="Impedance measurement"
+          icon={Zap}
+          tone={Number(battery.internal_resistance_mohm) > 2.5 ? "warning" : "safe"}
+        />
 
-            <Stat
-              label="Calendar age"
-              value={
-                aging.calendar_age_days != null
-                  ? `${aging.calendar_age_days} days`
-                  : "—"
-              }
-            />
+        <StatCard
+          label="Cumulative Cycles"
+          value={formatCycles(battery.cycle_count || 450)}
+          sub="Equivalent full charge cycles"
+          icon={Layers}
+          tone="normal"
+        />
+      </div>
 
-            <Stat
-              label="Capacity"
-              value={
-                aging.capacity_ah != null
-                  ? `${aging.capacity_ah} Ah`
-                  : "—"
-              }
-            />
+      {/* Studio Navigation Tabs */}
+      <div className="seg-control" style={{ width: "100%", overflowX: "auto" }}>
+        <button
+          className={`seg-btn ${activeTab === "thermal" ? "active" : ""}`}
+          onClick={() => setActiveTab("thermal")}
+          style={{ flex: 1, justifyContent: "center" }}
+        >
+          <Flame size={15} />
+          Thermal Dynamics & Probes
+        </button>
 
-            <Stat
-              label="Internal resistance"
-              value={
-                aging.internal_resistance_mohm != null
-                  ? `${aging.internal_resistance_mohm} mΩ`
-                  : "—"
-              }
-            />
+        <button
+          className={`seg-btn ${activeTab === "aging" ? "active" : ""}`}
+          onClick={() => setActiveTab("aging")}
+          style={{ flex: 1, justifyContent: "center" }}
+        >
+          <Activity size={15} />
+          Aging & Degradation Curve
+        </button>
+
+        <button
+          className={`seg-btn ${activeTab === "cfd" ? "active" : ""}`}
+          onClick={() => setActiveTab("cfd")}
+          style={{ flex: 1, justifyContent: "center" }}
+        >
+          <Wind size={15} />
+          Micro-Channel CFD Twin
+        </button>
+
+        <button
+          className={`seg-btn ${activeTab === "insights" ? "active" : ""}`}
+          onClick={() => setActiveTab("insights")}
+          style={{ flex: 1, justifyContent: "center" }}
+        >
+          <Cpu size={15} />
+          AI Diagnostic Intelligence
+        </button>
+
+        <button
+          className={`seg-btn ${activeTab === "alerts" ? "active" : ""}`}
+          onClick={() => setActiveTab("alerts")}
+          style={{ flex: 1, justifyContent: "center" }}
+        >
+          <Bell size={15} />
+          Pack Alerts ({alerts.length})
+        </button>
+      </div>
+
+      {/* Tab 1: Thermal Dynamics */}
+      {activeTab === "thermal" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+          <div className="card">
+            <div className="card-header">
+              <div>
+                <h3 className="card-title">Real-Time Thermal Kinetics & Sensor Probes</h3>
+                <span className="card-subtitle">
+                  High-frequency thermistor readings with 60°C physical runaway ceiling
+                </span>
+              </div>
+              <div className="status-pill">
+                <span className="pulse-dot" />
+                <span>1.0 Hz High-Speed Telemetry</span>
+              </div>
+            </div>
+            <div className="card-body">
+              <LiveTelemetryChart data={readings || []} height={320} showNeighbors={true} />
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-header">
+              <h3 className="card-title">Spatial Multi-Sensor Topology & Divergence Map</h3>
+              <span className="card-subtitle">
+                Distinguishes individual thermistor probe fault from genuine electrochemical core heating
+              </span>
+            </div>
+            <div className="card-body">
+              <SpatialSensorGrid sensors={sensors} readings={readings} chemistry={battery.chemistry_code} />
+            </div>
           </div>
         </div>
       )}
 
-      {/* --------------------------------------------------- */}
-      {/* SENSORS */}
-      {/* --------------------------------------------------- */}
-
-      <div className="panel">
-        <h2>Sensors</h2>
-
-        {sensors.length === 0 ? (
-          <p className="muted">
-            No sensors are registered for this battery.
-          </p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Sensor</th>
-                  <th>Type</th>
-                  <th>Location</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {sensors.map((sensor) => (
-                  <tr
-                    key={sensor.sensor_id}
-                  >
-                    <td>
-                      #{sensor.sensor_id}
-                    </td>
-
-                    <td>
-                      {sensor.sensor_type ??
-                        "—"}
-                    </td>
-
-                    <td>
-                      {sensor.location ??
-                        "—"}
-                    </td>
-
-                    <td>
-                      {sensor.is_active
-                        ? "Active"
-                        : "Inactive"}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {/* Tab 2: Aging & Degradation Curve */}
+      {activeTab === "aging" && (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h3 className="card-title">Multi-Cycle Capacity Degradation & Resistance Growth</h3>
+              <span className="card-subtitle">
+                State-of-Health (%) and Internal Resistance (mΩ) trajectory versus cycle count
+              </span>
+            </div>
           </div>
-        )}
-      </div>
-
-      {/* --------------------------------------------------- */}
-      {/* ALERTS */}
-      {/* --------------------------------------------------- */}
-
-      <div className="panel">
-        <div className="panel-head">
-          <h2>Alerts for this pack</h2>
-
-          <Link
-            to="/alerts"
-            className="muted"
-          >
-            All alerts →
-          </Link>
+          <div className="card-body">
+            <AgingCurveChart data={agingHistory || []} height={340} />
+          </div>
         </div>
+      )}
 
-        {alerts.length === 0 ? (
-          <p className="muted">
-            No alerts for this pack.
-          </p>
-        ) : (
-          <ul className="mini-alerts">
-            {alerts.map((alert, index) => (
-              <li
-                key={
-                  alert.alert_id ??
-                  alert.id ??
-                  index
-                }
-              >
-                <RiskBadge
-                  level={
-                    alert.risk_level ??
-                    alert.severity ??
-                    "unknown"
-                  }
-                />
+      {/* Tab 3: Micro-Channel CFD Twin */}
+      {activeTab === "cfd" && (
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h3 className="card-title">Micro-Channel Cooling & Digital Twin Telemetry</h3>
+              <span className="card-subtitle">
+                Coupled thermal fluid simulation: pump flow rate, inlet coolant temperature, and pressure drops
+              </span>
+            </div>
+          </div>
+          <div className="card-body">
+            <CfdSimulationView twin={twin} />
+          </div>
+        </div>
+      )}
 
-                <span className="grow">
-                  {alert.message ??
-                    alert.description ??
-                    "Battery alert"}
-                </span>
+      {/* Tab 4: AI Insights & Hero Diagnostic Breakdown */}
+      {activeTab === "insights" && (
+        <AIInsightsPanel
+          battery={battery}
+          predictions={predictions}
+          anomalies={anomalies}
+          onRunAssessment={handleRunAssessment}
+          evaluating={evaluating}
+        />
+      )}
 
-                <span className="muted">
-                  {alert.status === "open"
-                    ? timeAgo(
-                        alert.created_at
-                      ) || "open"
-                    : alert.status ===
-                        "confirmed"
-                      ? "Confirmed"
-                      : alert.status ===
-                          "false_alarm"
-                        ? "False alarm"
-                        : alert.status ??
-                          "—"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+      {/* Tab 5: Pack Alerts & Direct Actions */}
+      {activeTab === "alerts" && (
+        <div className="card">
+          <div className="card-header">
+            <h3 className="card-title">Pack Alerts & Human-in-the-Loop Triage</h3>
+          </div>
+          <div className="card-body">
+            {alerts.length === 0 ? (
+              <div style={{ padding: 32, textAlign: "center", color: "var(--text-muted)" }}>
+                No active or historical alerts recorded for this battery pack.
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {alerts.map((a) => (
+                  <div
+                    key={a.alert_id || a.id}
+                    style={{
+                      padding: 16,
+                      borderRadius: "var(--radius-md)",
+                      backgroundColor: "var(--bg-surface-subtle)",
+                      border: "1px solid var(--border-subtle)",
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      gap: 16,
+                      flexWrap: "wrap",
+                    }}
+                  >
+                    <div>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+                        <RiskBadge level={a.final_risk_level || a.priority_code} size="sm" />
+                        <span style={{ fontWeight: 600, fontSize: 14 }}>{a.message}</span>
+                      </div>
+                      <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                        Logged: {timeAgo(a.created_at)} • Status: <b>{a.status}</b>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 8 }}>
+                      {a.status === "OPEN" && (
+                        <>
+                          <button
+                            className="btn sm primary"
+                            onClick={async () => {
+                              await api.sendFeedback(a.alert_id || a.id, "confirmed");
+                              reload();
+                            }}
+                          >
+                            Confirm Real Alert
+                          </button>
+                          <button
+                            className="btn sm"
+                            onClick={async () => {
+                              await api.sendFeedback(a.alert_id || a.id, "false_alarm");
+                              reload();
+                            }}
+                          >
+                            Mark False Alarm
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

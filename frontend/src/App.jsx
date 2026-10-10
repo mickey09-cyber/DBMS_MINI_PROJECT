@@ -1,207 +1,68 @@
-import {
-  HashRouter,
-  Routes,
-  Route,
-  NavLink,
-  Link,
-} from "react-router-dom";
+import { HashRouter, Routes, Route, Link } from "react-router-dom";
+import { ThemeProvider } from "./context/ThemeContext";
+import { AuthProvider } from "./context/AuthContext";
+import NavigationShell from "./components/layout/NavigationShell";
 
-import Login from "./pages/Login";
 import Dashboard from "./pages/Dashboard";
 import BatteryDetail from "./pages/BatteryDetail";
 import Alerts from "./pages/Alerts";
-
-import DataEntry from "./pages/DataEntry";
 import Predictions from "./pages/Predictions";
 import Anomalies from "./pages/Anomalies";
 import Recommendations from "./pages/Recommendations";
+import DataEntry from "./pages/DataEntry";
 import Feedback from "./pages/Feedback";
 import ModelPerformance from "./pages/ModelPerformance";
 import Analytics from "./pages/Analytics";
 import Admin from "./pages/Admin";
-
-function Logo() {
-  return (
-    <svg
-      width="22"
-      height="22"
-      viewBox="0 0 24 24"
-      fill="none"
-      aria-hidden="true"
-    >
-      <rect
-        x="2"
-        y="7"
-        width="18"
-        height="11"
-        rx="2.5"
-        stroke="currentColor"
-        strokeWidth="1.8"
-      />
-
-      <path
-        d="M22 11v3"
-        stroke="currentColor"
-        strokeWidth="2"
-        strokeLinecap="round"
-      />
-
-      <path
-        d="M11.5 9.5 9 13h3l-1 3 3.5-4h-3l1-2.5z"
-        fill="currentColor"
-      />
-    </svg>
-  );
-}
+import Login from "./pages/Login";
 
 export default function App() {
   return (
-    <HashRouter>
-      <a className="skip" href="#main">
-        Skip to content
-      </a>
+    <ThemeProvider>
+      <AuthProvider>
+        <HashRouter>
+          <Routes>
+            {/* Standalone Login Route */}
+            <Route path="/login" element={<Login />} />
 
-      <header className="topbar">
-        <div className="wrap bar">
-          <Link to="/" className="brand">
-            <Logo />
-            Battery thermal monitor
-          </Link>
-
-          <nav aria-label="Main">
-            <NavLink to="/" end>
-              Fleet
-            </NavLink>
-
-            <NavLink to="/alerts">
-              Alerts
-            </NavLink>
-
-            <NavLink to="/predictions">
-              Predictions
-            </NavLink>
-
-            <NavLink to="/anomalies">
-              Anomalies
-            </NavLink>
-
-            <NavLink to="/analytics">
-              Analytics
-            </NavLink>
-
-            <NavLink to="/recommendations">
-              Recommendations
-            </NavLink>
-
-            <NavLink to="/data-entry">
-              Data Entry
-            </NavLink>
-
-            <NavLink to="/feedback">
-              Feedback
-            </NavLink>
-
-            <NavLink to="/model-performance">
-              Models
-            </NavLink>
-
-            <NavLink to="/admin">
-              Admin
-            </NavLink>
-          </nav>
-        </div>
-      </header>
-
-      <main id="main" className="wrap">
-        <Routes>
-
-          {/* Login */}
-          <Route
-            path="/login"
-            element={<Login />}
-          />
-
-          {/* Dashboard */}
-          <Route
-            path="/"
-            element={<Dashboard />}
-          />
-
-          {/* Battery Details */}
-          <Route
-            path="/battery/:id"
-            element={<BatteryDetail />}
-          />
-
-          {/* Alerts */}
-          <Route
-            path="/alerts"
-            element={<Alerts />}
-          />
-
-          {/* Predictions */}
-          <Route
-            path="/predictions"
-            element={<Predictions />}
-          />
-
-          {/* Anomalies */}
-          <Route
-            path="/anomalies"
-            element={<Anomalies />}
-          />
-
-          {/* Recommendations */}
-          <Route
-            path="/recommendations"
-            element={<Recommendations />}
-          />
-
-          {/* Data Entry */}
-          <Route
-            path="/data-entry"
-            element={<DataEntry />}
-          />
-
-          {/* Feedback */}
-          <Route
-            path="/feedback"
-            element={<Feedback />}
-          />
-
-          {/* Model Performance */}
-          <Route
-            path="/model-performance"
-            element={<ModelPerformance />}
-          />
-
-          {/* Analytics */}
-          <Route
-            path="/analytics"
-            element={<Analytics />}
-          />
-
-          {/* Admin */}
-          <Route
-            path="/admin"
-            element={<Admin />}
-          />
-
-          {/* 404 */}
-          <Route
-            path="*"
-            element={
-              <div className="state">
-                <h2>Page not found</h2>
-                <Link to="/">
-                  Back to fleet
-                </Link>
-              </div>
-            }
-          />
-
-        </Routes>
-      </main>
-    </HashRouter>
+            {/* Standard Protected Telemetry Routes wrapped in Navigation Shell */}
+            <Route
+              path="/*"
+              element={
+                <NavigationShell>
+                  <Routes>
+                    <Route path="/" element={<Dashboard />} />
+                    <Route path="/battery/:id" element={<BatteryDetail />} />
+                    <Route path="/alerts" element={<Alerts />} />
+                    <Route path="/predictions" element={<Predictions />} />
+                    <Route path="/anomalies" element={<Anomalies />} />
+                    <Route path="/model-performance" element={<ModelPerformance />} />
+                    <Route path="/analytics" element={<Analytics />} />
+                    <Route path="/recommendations" element={<Recommendations />} />
+                    <Route path="/data-entry" element={<DataEntry />} />
+                    <Route path="/feedback" element={<Feedback />} />
+                    <Route path="/admin" element={<Admin />} />
+                    <Route
+                      path="*"
+                      element={
+                        <div className="card" style={{ padding: 48, textAlign: "center" }}>
+                          <h2>Page Not Found</h2>
+                          <p style={{ color: "var(--text-muted)", marginBottom: 16 }}>
+                            The telemetry route does not exist.
+                          </p>
+                          <Link to="/" className="btn primary">
+                            Return to Fleet Overview
+                          </Link>
+                        </div>
+                      }
+                    />
+                  </Routes>
+                </NavigationShell>
+              }
+            />
+          </Routes>
+        </HashRouter>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }

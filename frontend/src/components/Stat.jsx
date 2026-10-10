@@ -1,10 +1,11 @@
+import StatCard from "./ui/StatCard";
+
 export default function Stat({ label, value, sub, tone }) {
-  const body = (
-    <>
-      <div className="stat-label">{label}</div>
-      <div className={`stat-value ${tone || ""}`}>{value}</div>
-      {sub && <div className="stat-sub muted">{sub}</div>}
-    </>
-  );
-  return <div className={`stat ${tone ? `stat-${tone}` : ""}`}>{body}</div>;
+  // Convert old tones to new tones
+  const toneMap = {
+    high: "critical",
+    medium: "warning",
+    low: "safe",
+  };
+  return <StatCard label={label} value={value} sub={sub} tone={toneMap[tone] || tone || "normal"} />;
 }

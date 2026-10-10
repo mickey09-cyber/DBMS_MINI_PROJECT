@@ -57,3 +57,6 @@ register_error_handlers(app)
 
 from app.routers.recommendations import router as recommendations_router
 app.include_router(recommendations_router)
+
+from app.routers.retrain import router as retrain_router
+app.include_router(retrain_router)

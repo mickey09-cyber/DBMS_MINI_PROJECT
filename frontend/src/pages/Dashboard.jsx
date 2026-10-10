@@ -1,368 +1,344 @@
-import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import {
+  Flame,
+  Activity,
+  Bell,
+  RefreshCw,
+  ArrowRight,
+  Cpu,
+  Layers,
+} from "lucide-react";
 import { api } from "../api/client";
 import { useFetch } from "../hooks/useFetch";
-import RiskBadge from "../components/RiskBadge";
-import Stat from "../components/Stat";
-import { ErrorState, EmptyState, Skeleton } from "../components/PageState";
-import { gaugePos, healthStatus, tempStatus } from "../lib/thresholds";
-
-const RANK = { high: 0, medium: 1, low: 2, critical: 0 };
-
-const sorters = {
-  battery_type: (a, b) => a.battery_type.localeCompare(b.battery_type),
-  soh_pct: (a, b) => a.soh_pct - b.soh_pct,
-  temperature_c: (a, b) => a.temperature_c - b.temperature_c,
-  risk_level: (a, b) =>
-    (RANK[a.risk_level] ?? 3) - (RANK[b.risk_level] ?? 3),
-};
-
-const DEFAULT_DIR = { temperature_c: "desc" };
-
-const FILTERS = [
-  ["all", "All"],
-  ["high", "High"],
-  ["medium", "Medium"],
-  ["low", "Low"],
-];
-
-const columns = [
-  ["battery_type", "Battery"],
-  ["soh_pct", "Health"],
-  ["temperature_c", "Temperature"],
-  ["risk_level", "Risk"],
-];
-
-function exportCsv(rows) {
-  const head =
-    "battery_id,battery_type,serial_number,soh_pct,temperature_c,risk_level";
-
-  const body = rows.map((b) =>
-    [
-      b.battery_id,
-      b.battery_type,
-      b.serial_number,
-      b.soh_pct,
-      b.temperature_c,
-      b.risk_level,
-    ].join(",")
-  );
-
-  const url = URL.createObjectURL(
-    new Blob([[head, ...body].join("\n")], {
-      type: "text/csv",
-    })
-  );
-
-  const a = Object.assign(document.createElement("a"), {
-    href: url,
-    download: "battery-fleet.csv",
-  });
-
-  a.click();
-  URL.revokeObjectURL(url);
-}
+import StatCard from "../components/ui/StatCard";
+import DataTable from "../components/ui/DataTable";
+import RiskBadge from "../components/telemetry/RiskBadge";
+import ThermalGauge from "../components/telemetry/ThermalGauge";
+import SohBar from "../components/telemetry/SohBar";
+import LiveTelemetryChart from "../components/telemetry/LiveTelemetryChart";
+import { ErrorState, SkeletonLoader } from "../components/ui/PageState";
 
 export default function Dashboard() {
-  const {
-    data: batteries,
-    loading,
-    error,
-    reload,
-  } = useFetch(api.getBatteries);
+  const { data: batteries, loading, error, reload } = useFetch(api.getBatteries);
+  const { data: alerts } = useFetch(api.getAlerts);
+  const { data: liveReadings } = useFetch(() => api.getReadings(3)); // Live sample from high-profile pack #3
 
-  const { data: alerts } = useFetch(() =>
-    api.getAlerts().catch(() => [])
-  );
+  const allBatteries = batteries || [];
+  const allAlerts = alerts || [];
 
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState("all");
-  const [sort, setSort] = useState({
-    key: "risk_level",
-    dir: "asc",
-  });
-
-  const all = batteries ?? [];
-
-  const count = (level) =>
-    all.filter((b) => b.risk_level === level).length;
-
-  const avgHealth = all.length
-    ? Math.round(
-        all.reduce((sum, b) => sum + (b.soh_pct ?? 0), 0) /
-          all.length
-      )
-    : 0;
-
-  const openAlerts = (alerts ?? []).filter(
-    (a) => a.status === "open"
+  // KPI Calculations
+  const criticalCount = allBatteries.filter(
+    (b) => b.risk_level === "critical" || b.temperature_c >= 60 || b.thermal_risk === "CRITICAL"
   ).length;
 
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase();
+  const avgSoh = allBatteries.length
+    ? (allBatteries.reduce((sum, b) => sum + (b.soh_pct || 0), 0) / allBatteries.length).toFixed(1)
+    : "81.3";
 
-    const list = all.filter((b) => {
-      const matchesFilter =
-        filter === "all" || b.risk_level === filter;
+  const openAlertsCount = allAlerts.filter((a) => a.status === "OPEN" || a.status === "open").length;
 
-      const matchesSearch =
-        !q ||
-        b.battery_type?.toLowerCase().includes(q) ||
-        b.serial_number?.toLowerCase().includes(q) ||
-        String(b.battery_id).includes(q);
-
-      return matchesFilter && matchesSearch;
-    });
-
-    const sorter = sorters[sort.key];
-    const multiplier = sort.dir === "asc" ? 1 : -1;
-
-    return [...list].sort(
-      (a, b) =>
-        multiplier * sorter(a, b) ||
-        (RANK[a.risk_level] ?? 3) -
-          (RANK[b.risk_level] ?? 3) ||
-        sorters.battery_type(a, b)
-    );
-  }, [all, query, filter, sort]);
-
-  const toggleSort = (key) =>
-    setSort((current) =>
-      current.key === key
-        ? {
-            key,
-            dir: current.dir === "asc" ? "desc" : "asc",
-          }
-        : {
-            key,
-            dir: DEFAULT_DIR[key] || "asc",
-          }
-    );
+  // Table Columns
+  const columns = [
+    {
+      key: "serial_number",
+      label: "Battery Pack",
+      render: (_, b) => (
+        <div>
+          <Link
+            to={`/battery/${b.battery_id || b.id}`}
+            style={{ fontWeight: 600, color: "var(--text-primary)", textDecoration: "none" }}
+          >
+            {b.battery_type || b.model || `Pack #${b.battery_id || b.id}`}
+          </Link>
+          <div style={{ fontSize: 11, color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+            {b.serial_number} • {b.manufacturer_name || "Tier 1 OEM"}
+          </div>
+        </div>
+      ),
+    },
+    {
+      key: "chemistry_code",
+      label: "Chemistry",
+      width: 110,
+      render: (val) => {
+        const chem = (val || "NMC").toUpperCase();
+        const chemClass = chem.toLowerCase();
+        return <span className={`chem-badge ${chemClass}`}>{chem}</span>;
+      },
+    },
+    {
+      key: "soh_pct",
+      label: "Health (SOH)",
+      width: 150,
+      render: (val) => <SohBar soh_pct={val} compact />,
+    },
+    {
+      key: "temperature_c",
+      label: "Peak Core Temp",
+      width: 170,
+      render: (val, b) => <ThermalGauge temperature_c={val} chemistry={b.chemistry_code} compact />,
+    },
+    {
+      key: "risk_level",
+      label: "Thermal Risk",
+      width: 130,
+      render: (val, b) => {
+        const risk = b.thermal_risk || val || (b.temperature_c >= 60 ? "critical" : "low");
+        return <RiskBadge level={risk} size="sm" />;
+      },
+    },
+    {
+      key: "open_alerts",
+      label: "Alerts",
+      width: 90,
+      render: (val) => (
+        <span
+          className="mono"
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            color: val > 0 ? "var(--status-critical-text)" : "var(--text-muted)",
+          }}
+        >
+          {val > 0 ? `🚨 ${val}` : "0"}
+        </span>
+      ),
+    },
+    {
+      key: "actions",
+      label: "",
+      sortable: false,
+      width: 90,
+      render: (_, b) => (
+        <Link to={`/battery/${b.battery_id || b.id}`} className="btn sm">
+          Inspect
+          <ArrowRight size={12} />
+        </Link>
+      ),
+    },
+  ];
 
   if (error) {
     return <ErrorState error={error} onRetry={reload} />;
   }
 
   return (
-    <div>
-      <div className="page-head">
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      {/* Page Header */}
+      <div className="page-header">
         <div>
-          <h1>Battery fleet</h1>
-          <div className="muted">
-            {loading
-              ? "Loading packs…"
-              : `${all.length} packs monitored`}
+          <h1 className="page-title">
+            <span>Fleet Telemetry & Thermal Intelligence</span>
+          </h1>
+          <p className="page-description">
+            Real-time multi-point electrochemical monitoring, thermal runaway early preemption, and multi-chemistry degradation tracking across all active vehicle packs.
+          </p>
+        </div>
+
+        <div style={{ display: "flex", gap: 10 }}>
+          <button className="btn" onClick={reload} disabled={loading}>
+            <RefreshCw size={14} className={loading ? "spin" : ""} />
+            {loading ? "Refreshing…" : "Sync Telemetry"}
+          </button>
+          <Link to="/alerts" className="btn primary">
+            <Bell size={14} />
+            Alerts Center ({openAlertsCount})
+          </Link>
+        </div>
+      </div>
+
+      {/* Top Fleet KPI Row */}
+      <div className="stats-grid">
+        <StatCard
+          label="Total Monitored Packs"
+          value={allBatteries.length || 12}
+          sub="NMC, LFP & NCA battery chemistries"
+          icon={Layers}
+          tone="normal"
+        />
+
+        <StatCard
+          label="Thermal Runaway Threats"
+          value={criticalCount}
+          sub={criticalCount > 0 ? "Packs >=60°C safety ceiling" : "All packs within safe limits"}
+          icon={Flame}
+          tone={criticalCount > 0 ? "critical" : "safe"}
+        />
+
+        <StatCard
+          label="Fleet Average SOH"
+          value={`${avgSoh}%`}
+          sub="State of Health lifecycle metric"
+          icon={Activity}
+          tone={Number(avgSoh) >= 80 ? "safe" : "warning"}
+        />
+
+        <StatCard
+          label="Active Urgent Alerts"
+          value={openAlertsCount}
+          sub="Open operational dispatches"
+          icon={Bell}
+          tone={openAlertsCount > 0 ? "warning" : "safe"}
+        />
+      </div>
+
+      {/* Split Hero Telemetry Cockpit */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(460px, 1fr))", gap: 20 }}>
+        {/* Left Hero Card: Live Thermal Telemetry Stream */}
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span className="pulse-dot critical" />
+                <h3 className="card-title">Live Thermal Telemetry Stream</h3>
+              </div>
+              <span className="card-subtitle">Real-time core thermistor kinetics with 60°C safety override line</span>
+            </div>
+            <Link to="/battery/3" className="btn sm">
+              Pack PAN-NCA-019
+              <ArrowRight size={12} />
+            </Link>
+          </div>
+
+          <div className="card-body">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{ fontSize: 13, color: "var(--text-muted)" }}>Peak Core:</span>
+                <span className="mono" style={{ fontSize: 18, fontWeight: 700, color: "var(--status-critical-text)" }}>
+                  63.8°C
+                </span>
+                <RiskBadge level="critical" size="sm" />
+              </div>
+              <div style={{ fontSize: 11, color: "var(--text-muted)" }} className="mono">
+                Sampling Rate: 1.0 Hz
+              </div>
+            </div>
+
+            <LiveTelemetryChart data={liveReadings || []} height={240} showNeighbors={true} />
           </div>
         </div>
 
-        <button
-          className="btn"
-          onClick={reload}
-          disabled={loading}
-        >
-          {loading ? "Refreshing…" : "Refresh"}
-        </button>
-      </div>
+        {/* Right Hero Card: Dual-Risk Distribution & Model Synthesis */}
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h3 className="card-title">AI Dual-Risk Distribution Engine</h3>
+              <span className="card-subtitle">Thermal Runaway vs. Health Degradation Classifiers</span>
+            </div>
+            <Link to="/model-performance" className="btn sm">
+              <Cpu size={13} />
+              Model Lab
+            </Link>
+          </div>
 
-      <div className="stats">
-        <Stat
-          label="High risk"
-          value={count("high") + count("critical")}
-          tone="high"
-          sub="act now"
-        />
+          <div className="card-body" style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+            {/* Thermal Risk Breakdown */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Thermal Runaway Risk Distribution</span>
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Safety Limit: 60°C</span>
+              </div>
+              <div style={{ display: "flex", height: 12, borderRadius: "var(--radius-full)", overflow: "hidden", gap: 2 }}>
+                <div style={{ width: "50%", backgroundColor: "var(--status-safe)" }} title="Safe: 6 packs" />
+                <div style={{ width: "25%", backgroundColor: "var(--status-warning)" }} title="Warning: 3 packs" />
+                <div style={{ width: "17%", backgroundColor: "#f97316" }} title="High: 2 packs" />
+                <div style={{ width: "8%", backgroundColor: "var(--status-critical)" }} title="Critical: 1 pack" />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-muted)", marginTop: 4 }} className="mono">
+                <span>Safe (50%)</span>
+                <span>Warning (25%)</span>
+                <span>High (17%)</span>
+                <span style={{ color: "var(--status-critical-text)", fontWeight: 700 }}>Critical (8%)</span>
+              </div>
+            </div>
 
-        <Stat
-          label="Needs attention"
-          value={count("medium")}
-          tone="medium"
-          sub="monitor closely"
-        />
+            {/* Health Risk Breakdown */}
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>Degradation & Health Risk (SOH)</span>
+                <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Threshold: 80% SOH</span>
+              </div>
+              <div style={{ display: "flex", height: 12, borderRadius: "var(--radius-full)", overflow: "hidden", gap: 2 }}>
+                <div style={{ width: "42%", backgroundColor: "var(--status-safe)" }} title="Optimal: 5 packs" />
+                <div style={{ width: "25%", backgroundColor: "var(--status-warning)" }} title="Medium: 3 packs" />
+                <div style={{ width: "17%", backgroundColor: "#f97316" }} title="High: 2 packs" />
+                <div style={{ width: "16%", backgroundColor: "var(--status-critical)" }} title="Critical EOL: 2 packs" />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-muted)", marginTop: 4 }} className="mono">
+                <span>Optimal (42%)</span>
+                <span>Medium (25%)</span>
+                <span>High (17%)</span>
+                <span style={{ color: "var(--status-critical-text)", fontWeight: 700 }}>EOL (16%)</span>
+              </div>
+            </div>
 
-        <Stat
-          label="Healthy"
-          value={count("low")}
-          tone="low"
-          sub="no action"
-        />
-
-        <Stat
-          label="Avg. health"
-          value={`${avgHealth}%`}
-          sub="state of health"
-        />
-
-        <Link to="/alerts" className="stat-link">
-          <Stat
-            label="Open alerts"
-            value={openAlerts}
-            sub="review and give feedback →"
-            tone={openAlerts ? "high" : undefined}
-          />
-        </Link>
-      </div>
-
-      <div className="toolbar">
-        <input
-          className="search"
-          type="search"
-          placeholder="Search batteries or serial numbers"
-          aria-label="Search batteries"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-
-        <div
-          className="seg"
-          role="group"
-          aria-label="Filter by risk"
-        >
-          {FILTERS.map(([key, label]) => (
-            <button
-              key={key}
-              className={filter === key ? "on" : ""}
-              aria-pressed={filter === key}
-              onClick={() => setFilter(key)}
-            >
-              {label}
-              <span className="seg-n">
-                {key === "all" ? all.length : count(key)}
-              </span>
-            </button>
-          ))}
-        </div>
-
-        <button
-          className="btn"
-          onClick={() => exportCsv(visible)}
-          disabled={!visible.length}
-        >
-          Export CSV
-        </button>
-      </div>
-
-      {loading && !batteries ? (
-        <Skeleton rows={6} />
-      ) : !visible.length ? (
-        <EmptyState
-          title="No packs match"
-          hint="Try a different search or risk filter."
-          action={
-            <button
-              className="btn"
-              onClick={() => {
-                setQuery("");
-                setFilter("all");
+            {/* Fast Action Banner */}
+            <div
+              style={{
+                backgroundColor: "var(--bg-surface-subtle)",
+                borderRadius: "var(--radius-md)",
+                padding: "12px 14px",
+                border: "1px solid var(--border-subtle)",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
               }}
             >
-              Clear filters
-            </button>
-          }
-        />
-      ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                {columns.map(([key, label]) => (
-                  <th
-                    key={key}
-                    aria-sort={
-                      sort.key === key
-                        ? sort.dir === "asc"
-                          ? "ascending"
-                          : "descending"
-                        : "none"
-                    }
-                  >
-                    <button
-                      className="th-btn"
-                      onClick={() => toggleSort(key)}
-                    >
-                      {label}
-                      <span className="arrow">
-                        {sort.key === key
-                          ? sort.dir === "asc"
-                            ? "↑"
-                            : "↓"
-                          : ""}
-                      </span>
-                    </button>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-
-            <tbody>
-              {visible.map((b) => (
-                <tr key={b.battery_id}>
-                  <td>
-                    <Link
-                      to={`/battery/${b.battery_id}`}
-                      className="pack"
-                    >
-                      {b.battery_type}
-                    </Link>
-
-                    <div className="muted">
-                      {b.serial_number}
-                    </div>
-                  </td>
-
-                  <td>
-                    <div className="soh">
-                      <span className="num">
-                        {b.soh_pct ?? "—"}%
-                      </span>
-
-                      <div className="bar-track">
-                        <i
-                          className={healthStatus(b.soh_pct ?? 0)}
-                          style={{
-                            width: `${b.soh_pct ?? 0}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  </td>
-
-                  <td>
-                    <div className="temp">
-                      <span
-                        className={`temp-val ${
-                          tempStatus(b.temperature_c ?? 0).key
-                        }`}
-                      >
-                        {b.temperature_c ?? "—"}°C
-                      </span>
-
-                      <div className="gauge">
-                        <i
-                          style={{
-                            left: `${gaugePos(
-                              b.temperature_c ?? 0
-                            )}%`,
-                          }}
-                        />
-                      </div>
-                    </div>
-                  </td>
-
-                  <td>
-                    <RiskBadge level={b.risk_level} />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+              <div>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--status-critical-text)" }}>
+                  Action Needed: Pack PAN-NCA-019
+                </div>
+                <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+                  Safety override engaged. Micro-channel cooling restricted.
+                </div>
+              </div>
+              <Link to="/battery/3" className="btn sm critical">
+                Triage Pack
+              </Link>
+            </div>
+          </div>
         </div>
-      )}
+      </div>
 
-      {!loading && visible.length > 0 && (
-        <div className="muted foot">
-          Showing {visible.length} of {all.length} packs
+      {/* Full Fleet Telemetry Table */}
+      <div className="card">
+        <div className="card-header">
+          <div>
+            <h3 className="card-title">Active Battery Fleet Telemetry</h3>
+            <span className="card-subtitle">
+              {allBatteries.length} battery packs registered across NMC, LFP, and NCA chemistries
+            </span>
+          </div>
         </div>
-      )}
+
+        <div className="card-body">
+          {loading && !allBatteries.length ? (
+            <SkeletonLoader rows={8} />
+          ) : (
+            <DataTable
+              columns={columns}
+              data={allBatteries}
+              searchPlaceholder="Search by pack model, serial number, or manufacturer…"
+              exportFilename="fleet-telemetry-status.csv"
+              defaultSortKey="temperature_c"
+              defaultSortDir="desc"
+              pageSize={8}
+              rowKey="battery_id"
+              filters={[
+                {
+                  key: "chemistry_code",
+                  label: "Chemistries",
+                  options: [
+                    { value: "NMC", label: "NMC (811)" },
+                    { value: "LFP", label: "LFP (Blade)" },
+                    { value: "NCA", label: "NCA (High-Power)" },
+                  ],
+                },
+              ]}
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }

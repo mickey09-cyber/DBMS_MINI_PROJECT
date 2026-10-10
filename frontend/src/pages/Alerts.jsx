@@ -1,92 +1,318 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
+import {
+  Bell,
+  CheckCircle2,
+  AlertTriangle,
+  AlertOctagon,
+  ShieldAlert,
+  Search,
+  Filter,
+  ArrowRight,
+  RefreshCw,
+  ExternalLink,
+} from "lucide-react";
 import { api } from "../api/client";
 import { useFetch } from "../hooks/useFetch";
-import RiskBadge from "../components/RiskBadge";
-import { ErrorState, EmptyState, Skeleton } from "../components/PageState";
+import RiskBadge from "../components/telemetry/RiskBadge";
+import StatCard from "../components/ui/StatCard";
+import { ErrorState, EmptyState, SkeletonLoader } from "../components/ui/PageState";
 import { timeAgo } from "../lib/thresholds";
 
-const TABS = [["open", "Open"], ["confirmed", "Confirmed"], ["false_alarm", "False alarms"], ["all", "All"]];
-const RANK = { high: 0, medium: 1, low: 2 };
-const STATUS_TEXT = { confirmed: "Confirmed as real", false_alarm: "Marked as false alarm" };
+const TABS = [
+  { key: "OPEN", label: "Open Alerts" },
+  { key: "ACKNOWLEDGED", label: "Acknowledged" },
+  { key: "CONFIRMED", label: "Confirmed Real" },
+  { key: "FALSE_ALARM", label: "False Alarms" },
+  { key: "ALL", label: "All Records" },
+];
 
 export default function Alerts() {
-  const { data, loading, error, reload, setData } = useFetch(async () => {
-    const [alerts, batteries] = await Promise.all([api.getAlerts(), api.getBatteries().catch(() => [])]);
-    return { alerts, names: Object.fromEntries(batteries.map((b) => [b.id, b.model])) };
-  });
-  const [tab, setTab] = useState("open");
-  const [busy, setBusy] = useState(null);
-  const [failed, setFailed] = useState("");
+  const { data: alerts, loading, error, reload, setData } = useFetch(api.getAlerts);
+  const [tab, setTab] = useState("OPEN");
+  const [search, setSearch] = useState("");
+  const [busyId, setBusyId] = useState(null);
 
-  if (error) return <ErrorState error={error} onRetry={reload} />;
-  const alerts = data?.alerts ?? [];
-  const names = data?.names ?? {};
-  const countOf = (k) => (k === "all" ? alerts.length : alerts.filter((a) => a.status === k).length);
-  const list = alerts
-    .filter((a) => tab === "all" || a.status === tab)
-    .sort((a, b) => RANK[a.risk_level] - RANK[b.risk_level] || new Date(b.created_at || 0) - new Date(a.created_at || 0));
+  const allAlerts = alerts || [];
 
-  const give = async (id, verdict) => {
-    setBusy(id);
-    setFailed("");
+  const countOf = (k) => {
+    if (k === "ALL") return allAlerts.length;
+    return allAlerts.filter((a) => (a.status || "").toUpperCase() === k).length;
+  };
+
+  const filteredList = useMemo(() => {
+    return allAlerts
+      .filter((a) => {
+        const matchesTab = tab === "ALL" || (a.status || "").toUpperCase() === tab;
+        const q = search.trim().toLowerCase();
+        const matchesSearch =
+          !q ||
+          a.message?.toLowerCase().includes(q) ||
+          a.serial_number?.toLowerCase().includes(q) ||
+          String(a.battery_id).includes(q);
+        return matchesTab && matchesSearch;
+      })
+      .sort((a, b) => {
+        // Critical and High first, then newest
+        const rank = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+        const rankA = rank[a.priority_code || a.final_risk_level] ?? 4;
+        const rankB = rank[b.priority_code || b.final_risk_level] ?? 4;
+        return rankA - rankB || new Date(b.created_at || 0) - new Date(a.created_at || 0);
+      });
+  }, [allAlerts, tab, search]);
+
+  const handleAcknowledge = async (alertId) => {
+    setBusyId(alertId);
     try {
-      await api.sendFeedback(id, verdict);
-      setData((d) => ({ ...d, alerts: d.alerts.map((a) => (a.id === id ? { ...a, status: verdict } : a)) }));
-    } catch {
-      setFailed("Couldn't save your feedback. Please try again.");
+      await api.acknowledgeAlert(alertId);
+      setData((prev) =>
+        prev.map((a) =>
+          a.alert_id === alertId || a.id === alertId
+            ? { ...a, status: "ACKNOWLEDGED", acknowledged_at: new Date().toISOString() }
+            : a
+        )
+      );
+    } catch (err) {
+      console.error("Acknowledge failed:", err);
     } finally {
-      setBusy(null);
+      setBusyId(null);
     }
   };
 
+  const handleSendFeedback = async (alertId, verdict) => {
+    setBusyId(alertId);
+    try {
+      await api.sendFeedback(alertId, verdict);
+      const newStatus = verdict === "confirmed" ? "CONFIRMED" : "FALSE_ALARM";
+      setData((prev) =>
+        prev.map((a) =>
+          a.alert_id === alertId || a.id === alertId ? { ...a, status: newStatus } : a
+        )
+      );
+    } catch (err) {
+      console.error("Feedback submission failed:", err);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (error) return <ErrorState error={error} onRetry={reload} />;
+
   return (
-    <div>
-      <div className="page-head">
+    <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+      {/* Page Header */}
+      <div className="page-header">
         <div>
-          <h1>Alerts</h1>
-          <div className="muted">Your answers help the model learn which alerts were real.</div>
+          <h1 className="page-title">
+            <Bell size={24} style={{ color: "var(--accent-primary)" }} />
+            <span>Alerts & Safety Dispatch Center</span>
+          </h1>
+          <p className="page-description">
+            Prioritized real-time battery thermal warnings, automated safety trigger dispatches, and human-in-the-loop validation for model retraining.
+          </p>
+        </div>
+
+        <button className="btn" onClick={reload} disabled={loading}>
+          <RefreshCw size={14} className={loading ? "spin" : ""} />
+          Refresh
+        </button>
+      </div>
+
+      {/* Top Alert Stats */}
+      <div className="stats-grid">
+        <StatCard
+          label="Active Open Alerts"
+          value={countOf("OPEN")}
+          sub="Requires operator review"
+          icon={AlertTriangle}
+          tone={countOf("OPEN") > 0 ? "warning" : "safe"}
+        />
+
+        <StatCard
+          label="Acknowledged"
+          value={countOf("ACKNOWLEDGED")}
+          sub="Under investigation"
+          icon={ShieldAlert}
+          tone="normal"
+        />
+
+        <StatCard
+          label="Confirmed Real Alerts"
+          value={countOf("CONFIRMED")}
+          sub="Verified battery hazard"
+          icon={CheckCircle2}
+          tone="critical"
+        />
+
+        <StatCard
+          label="False Alarms"
+          value={countOf("FALSE_ALARM")}
+          sub="Sensor drift or noise"
+          icon={Bell}
+          tone="safe"
+        />
+      </div>
+
+      {/* Filter Tabs and Search Toolbar */}
+      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <div className="seg-control">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              className={`seg-btn ${tab === t.key ? "active" : ""}`}
+              onClick={() => setTab(t.key)}
+            >
+              <span>{t.label}</span>
+              <span className="seg-badge">{countOf(t.key)}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="search-input-wrapper">
+          <Search size={15} className="search-icon" />
+          <input
+            type="search"
+            className="search-input"
+            placeholder="Search alerts or pack serial…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
       </div>
 
-      <div className="seg" role="group" aria-label="Filter alerts" style={{ marginBottom: 18 }}>
-        {TABS.map(([k, label]) => (
-          <button key={k} className={tab === k ? "on" : ""} aria-pressed={tab === k} onClick={() => setTab(k)}>
-            {label}<span className="seg-n">{countOf(k)}</span>
-          </button>
-        ))}
-      </div>
-
-      {failed && <div className="callout err" role="alert">{failed}</div>}
-
-      {loading && !data ? <Skeleton rows={3} /> : list.length === 0 ? (
+      {/* Alert Feed */}
+      {loading && !allAlerts.length ? (
+        <SkeletonLoader rows={6} />
+      ) : filteredList.length === 0 ? (
         <EmptyState
-          title={tab === "open" ? "All caught up" : "Nothing here"}
-          hint={tab === "open" ? "No open alerts need your review." : "No alerts in this view."}
+          title={tab === "OPEN" ? "All caught up" : "No alerts found"}
+          hint={tab === "OPEN" ? "No open thermal alerts need attention." : "No records match the current filter."}
         />
       ) : (
-        list.map((a) => (
-          <div key={a.id} className={`alert ${a.risk_level}`}>
-            <div className="alert-top">
-              <RiskBadge level={a.risk_level} />
-              <strong>{a.message}</strong>
-              {a.created_at && <span className="muted when">{timeAgo(a.created_at)}</span>}
-            </div>
-            <div className="muted">
-              <Link to={`/battery/${a.battery_id}`}>{names[a.battery_id] || `Battery ${a.battery_id}`}</Link>
-            </div>
-            <div className="alert-actions">
-              {a.status === "open" ? (
-                <>
-                  <button className="btn primary" disabled={busy === a.id} onClick={() => give(a.id, "confirmed")}>Confirm alert</button>
-                  <button className="btn" disabled={busy === a.id} onClick={() => give(a.id, "false_alarm")}>Mark as false alarm</button>
-                </>
-              ) : (
-                <span className={`resolved ${a.status}`}>{STATUS_TEXT[a.status] ?? a.status}</span>
-              )}
-            </div>
-          </div>
-        ))
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {filteredList.map((a) => {
+            const id = a.alert_id || a.id;
+            const isCrit = (a.priority_code || a.final_risk_level) === "CRITICAL";
+            const isHigh = (a.priority_code || a.final_risk_level) === "HIGH";
+            const isOpen = (a.status || "").toUpperCase() === "OPEN";
+            const isAck = (a.status || "").toUpperCase() === "ACKNOWLEDGED";
+
+            return (
+              <div
+                key={id}
+                className="card"
+                style={{
+                  borderLeft: `4px solid ${
+                    isCrit ? "var(--status-critical)" : isHigh ? "var(--status-warning)" : "var(--accent-primary)"
+                  }`,
+                }}
+              >
+                <div className="card-body" style={{ padding: 18 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 12 }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, flex: 1, minWidth: 280 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <RiskBadge level={a.priority_code || a.final_risk_level} size="sm" />
+                        <span style={{ fontSize: 15, fontWeight: 700, color: "var(--text-primary)" }}>
+                          {a.message}
+                        </span>
+                      </div>
+
+                      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14, fontSize: 12.5, color: "var(--text-muted)" }}>
+                        <span>
+                          Target Pack:{" "}
+                          <Link
+                            to={`/battery/${a.battery_id}`}
+                            style={{ color: "var(--accent-primary)", fontWeight: 600, textDecoration: "none" }}
+                          >
+                            {a.serial_number || `Pack #${a.battery_id}`}
+                          </Link>
+                        </span>
+                        <span>•</span>
+                        <span>Detected: <b className="mono">{timeAgo(a.created_at)}</b></span>
+                        <span>•</span>
+                        <span>Status: <b className="mono">{a.status}</b></span>
+                      </div>
+
+                      {a.recommendation && (
+                        <div
+                          style={{
+                            marginTop: 6,
+                            padding: "8px 12px",
+                            backgroundColor: "var(--bg-surface-subtle)",
+                            borderRadius: "var(--radius-sm)",
+                            fontSize: 12.5,
+                            color: "var(--text-secondary)",
+                            borderLeft: "2px solid var(--accent-primary)",
+                          }}
+                        >
+                          <b>Action:</b> {a.recommendation}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Operational Triage Actions */}
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <Link to={`/battery/${a.battery_id}`} className="btn sm">
+                        Inspect Pack
+                        <ExternalLink size={12} />
+                      </Link>
+
+                      {isOpen && (
+                        <button
+                          className="btn sm"
+                          onClick={() => handleAcknowledge(id)}
+                          disabled={busyId === id}
+                        >
+                          Acknowledge
+                        </button>
+                      )}
+
+                      {(isOpen || isAck) && (
+                        <>
+                          <button
+                            className="btn sm primary"
+                            onClick={() => handleSendFeedback(id, "confirmed")}
+                            disabled={busyId === id}
+                          >
+                            Confirm Alert
+                          </button>
+                          <button
+                            className="btn sm"
+                            onClick={() => handleSendFeedback(id, "false_alarm")}
+                            disabled={busyId === id}
+                          >
+                            False Alarm
+                          </button>
+                        </>
+                      )}
+
+                      {!isOpen && !isAck && (
+                        <span
+                          className="mono"
+                          style={{
+                            fontSize: 11,
+                            padding: "3px 8px",
+                            borderRadius: "var(--radius-sm)",
+                            backgroundColor:
+                              a.status === "CONFIRMED"
+                                ? "var(--status-critical-bg)"
+                                : "var(--status-safe-bg)",
+                            color:
+                              a.status === "CONFIRMED"
+                                ? "var(--status-critical-text)"
+                                : "var(--status-safe-text)",
+                          }}
+                        >
+                          {a.status === "CONFIRMED" ? "✓ Verified Real Hazard" : "✓ False Alarm Recorded"}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );

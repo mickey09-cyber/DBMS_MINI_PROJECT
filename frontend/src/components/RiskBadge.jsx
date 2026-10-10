@@ -1,5 +1,3 @@
-const labels = { low: "Low", medium: "Medium", high: "High" };
+import RiskBadge from "./telemetry/RiskBadge";
 
-export default function RiskBadge({ level }) {
-  return <span className={`badge ${level}`}><i className="dot" />{labels[level] ?? level}</span>;
-}
+export default RiskBadge;
